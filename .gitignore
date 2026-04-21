@@ -1,0 +1,28 @@
+# Pillow / vendored Python deps installed locally
+vendor/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Runtime artifacts
+batch.log
+manifest.jsonl
+stdout.log
+
+# Generated / regenerated assets
+filler_tile.png
+demo_*.preview.png
+
+# Tooling / editor / agent state
+.claude/
+.vscode/
+.idea/
+*.swp
+
+# Out-of-tree vendor source (Blender MCP addon checkout)
+blender-mcp-main/
+
+# OS junk
+Thumbs.db
+.DS_Store
