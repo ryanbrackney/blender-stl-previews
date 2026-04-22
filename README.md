@@ -20,6 +20,11 @@ A single per-STL sidecar, before being grouped:
 
 ![example single preview](examples/example_single.png)
 
+The same single sidecar with `--no-inset` (4 main views only, cleaner read
+when the inset would overlap subject content):
+
+![example single preview, no inset](examples/example_no_inset.png)
+
 ## What it produces
 
 For each `model.stl`:
