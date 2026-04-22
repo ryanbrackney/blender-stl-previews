@@ -348,41 +348,86 @@ def main():
     log(f"discovered {total} .stl files")
     manifest("discovered", count=total)
 
+    # Pipelined: as soon as we leave a folder, hand it to a stitch worker
+    # thread. PIL releases the GIL for image ops, so this overlaps cleanly with
+    # Blender's CPU-bound rendering. Crash-resilient too: each completed folder
+    # is fully done (renders + group images) before the loop moves on.
+    from concurrent.futures import ThreadPoolExecutor
+
     rendered = 0
     skipped = 0
     failed = 0
-    touched_folders = set()
-    t_start = time.time()
-    for i, stl in enumerate(stls, 1):
-        out = stl.parent / (stl.stem + ".preview.png")
-        touched_folders.add(stl.parent)
-        if out.exists() and not args.force:
-            skipped += 1
-            if skipped % 50 == 0:
-                log(f"  [{i}/{total}] skipped {skipped} (exists)")
-            continue
-        ts = time.time()
-        try:
-            dims = render_stl_preview(scene, cam, cam_data, stl, out)
-            dt = time.time() - ts
-            rendered += 1
-            log(f"  [{i}/{total}] {stl.name} ({dt:.1f}s)")
-            manifest("render", stl=str(stl), out=str(out), seconds=round(dt, 2),
-                     bbox=[round(x, 3) for x in dims])
-        except Exception as e:
-            failed += 1
-            log(f"  [{i}/{total}] FAILED {stl.name}: {e}")
-            manifest("render_error", stl=str(stl), error=str(e))
-
-    log(f"pass1 done: rendered={rendered} skipped={skipped} failed={failed} "
-        f"in {time.time()-t_start:.1f}s")
-
-    # Pass 2: group images per touched folder
-    log(f"pass2: stitching group images across {len(touched_folders)} folders")
     groups_made = 0
-    for folder in sorted(touched_folders):
-        groups_made += stitch_groups_for_folder(folder, args.force_groups)
-    log(f"pass2 done: group images made/updated={groups_made}")
+    t_start = time.time()
+    stitch_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stitch")
+    pending = []  # in-flight stitch futures
+
+    def submit_stitch(folder):
+        nonlocal groups_made
+        def _job():
+            return stitch_groups_for_folder(folder, args.force_groups)
+        fut = stitch_pool.submit(_job)
+        pending.append((folder, fut))
+
+    def reap_done():
+        nonlocal groups_made
+        still = []
+        for folder, fut in pending:
+            if fut.done():
+                try:
+                    groups_made += fut.result()
+                except Exception as e:
+                    log(f"  STITCH ERROR in {folder}: {e}")
+                    manifest("stitch_error", folder=str(folder), error=str(e))
+            else:
+                still.append((folder, fut))
+        pending[:] = still
+
+    prev_folder = None
+    try:
+        for i, stl in enumerate(stls, 1):
+            # folder transition: previous folder is now fully rendered
+            if prev_folder is not None and stl.parent != prev_folder:
+                submit_stitch(prev_folder)
+                reap_done()
+            prev_folder = stl.parent
+
+            out = stl.parent / (stl.stem + ".preview.png")
+            if out.exists() and not args.force:
+                skipped += 1
+                if skipped % 50 == 0:
+                    log(f"  [{i}/{total}] skipped {skipped} (exists)")
+                continue
+            ts = time.time()
+            try:
+                dims = render_stl_preview(scene, cam, cam_data, stl, out)
+                dt = time.time() - ts
+                rendered += 1
+                log(f"  [{i}/{total}] {stl.name} ({dt:.1f}s)")
+                manifest("render", stl=str(stl), out=str(out), seconds=round(dt, 2),
+                         bbox=[round(x, 3) for x in dims])
+            except Exception as e:
+                failed += 1
+                log(f"  [{i}/{total}] FAILED {stl.name}: {e}")
+                manifest("render_error", stl=str(stl), error=str(e))
+
+        # last folder + drain
+        if prev_folder is not None:
+            submit_stitch(prev_folder)
+    finally:
+        log(f"pass1 done: rendered={rendered} skipped={skipped} failed={failed} "
+            f"in {time.time()-t_start:.1f}s")
+        if pending:
+            log(f"draining {len(pending)} pending stitch jobs...")
+        stitch_pool.shutdown(wait=True)
+        # final reap to count completed jobs
+        for folder, fut in pending:
+            try:
+                groups_made += fut.result()
+            except Exception as e:
+                log(f"  STITCH ERROR in {folder}: {e}")
+                manifest("stitch_error", folder=str(folder), error=str(e))
+        pending.clear()
 
     manifest("finish", rendered=rendered, skipped=skipped, failed=failed,
              groups=groups_made, seconds=round(time.time() - t_start, 2))
