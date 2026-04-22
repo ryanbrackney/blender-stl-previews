@@ -9,6 +9,17 @@ files at a glance instead of opening each one.
 Built for browsing large 3D-print STL libraries (Warhammer / kitbash bits in
 my case — thousands of files across hundreds of folders).
 
+## Example output
+
+Folder-wide `_ALL.preview.png` for a 4-STL test directory (each tile shows
+4 main views + 4 dead-center inverse mini-views + filename label):
+
+![example folder aggregate](examples/example_all.png)
+
+A single per-STL sidecar, before being grouped:
+
+![example single preview](examples/example_single.png)
+
 ## What it produces
 
 For each `model.stl`:
