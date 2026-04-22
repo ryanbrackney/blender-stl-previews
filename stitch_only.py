@@ -165,7 +165,10 @@ def stitch_group(paths, out_path):
                 [x - 1 - b, y - 1 - b, x + w + b, y + h + b],
                 outline=GROUP_BORDER_RGB
             )
-    canvas.save(out_path, 'PNG', optimize=True)
+    # Huge group canvases (up to ~140MP for a 30-item _ALL) make optimize=True
+    # dominate wallclock. Fast compression for ~5-10x faster save at the cost
+    # of a few hundred KB per file.
+    canvas.save(out_path, 'PNG', optimize=False, compress_level=1)
     return (GW, GH)
 
 def stitch_groups_for_folder(folder, force_groups):
