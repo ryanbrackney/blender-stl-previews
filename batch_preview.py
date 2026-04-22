@@ -157,7 +157,7 @@ def render_view_u8(scene, cam, cam_data, cam_loc, ortho, max_dim):
     # and yields uint8 RGBA with origin already top-left (no flip needed).
     return np.asarray(Image.open(_render_tmp).convert('RGBA'))
 
-def render_stl_preview(scene, cam, cam_data, stl_path, out_path):
+def render_stl_preview(scene, cam, cam_data, stl_path, out_path, inset=True):
     clear_meshes()
     import_stl(stl_path)
     obj = next((o for o in bpy.data.objects if o.type == 'MESH'), None)
@@ -180,14 +180,15 @@ def render_stl_preview(scene, cam, cam_data, stl_path, out_path):
 
     # 4 inverse mini-views to fill the dead space at the composite center.
     # Render at lower resolution to keep batch fast (each main view dominates cost).
-    saved_x, saved_y = scene.render.resolution_x, scene.render.resolution_y
-    scene.render.resolution_x = INSET_MINI; scene.render.resolution_y = INSET_MINI
-    v_back    = render_view_u8(scene, cam, cam_data, (0,  dist, 0),  True,  max_dim)
-    v_left    = render_view_u8(scene, cam, cam_data, (-dist, 0, 0), True,  max_dim)
-    v_bottom  = render_view_u8(scene, cam, cam_data, (0, 0, -dist), True,  max_dim)
-    v_antiiso = render_view_u8(scene, cam, cam_data,
-                               (-dist*0.7, dist*0.7, -dist*0.55), False, max_dim)
-    scene.render.resolution_x, scene.render.resolution_y = saved_x, saved_y
+    if inset:
+        saved_x, saved_y = scene.render.resolution_x, scene.render.resolution_y
+        scene.render.resolution_x = INSET_MINI; scene.render.resolution_y = INSET_MINI
+        v_back    = render_view_u8(scene, cam, cam_data, (0,  dist, 0),  True,  max_dim)
+        v_left    = render_view_u8(scene, cam, cam_data, (-dist, 0, 0), True,  max_dim)
+        v_bottom  = render_view_u8(scene, cam, cam_data, (0, 0, -dist), True,  max_dim)
+        v_antiiso = render_view_u8(scene, cam, cam_data,
+                                   (-dist*0.7, dist*0.7, -dist*0.55), False, max_dim)
+        scene.render.resolution_x, scene.render.resolution_y = saved_x, saved_y
 
     W = TILE * 2
     H = TILE * 2 + LABEL_H
@@ -197,15 +198,16 @@ def render_stl_preview(scene, cam, cam_data, stl_path, out_path):
     canvas.paste(Image.fromarray(v_top,   'RGBA'), (0, TILE))
     canvas.paste(Image.fromarray(v_iso,   'RGBA'), (TILE, TILE))
 
-    # paste the 2x2 inverse-inset dead-center
-    INSET_W = INSET_MINI * 2 + INSET_GAP
-    ix0 = W // 2 - INSET_W // 2
-    iy0 = TILE - INSET_W // 2
-    canvas.paste(Image.fromarray(v_back,    'RGBA'), (ix0, iy0))
-    canvas.paste(Image.fromarray(v_left,    'RGBA'), (ix0 + INSET_MINI + INSET_GAP, iy0))
-    canvas.paste(Image.fromarray(v_bottom,  'RGBA'), (ix0, iy0 + INSET_MINI + INSET_GAP))
-    canvas.paste(Image.fromarray(v_antiiso, 'RGBA'),
-                 (ix0 + INSET_MINI + INSET_GAP, iy0 + INSET_MINI + INSET_GAP))
+    if inset:
+        # paste the 2x2 inverse-inset dead-center
+        INSET_W = INSET_MINI * 2 + INSET_GAP
+        ix0 = W // 2 - INSET_W // 2
+        iy0 = TILE - INSET_W // 2
+        canvas.paste(Image.fromarray(v_back,    'RGBA'), (ix0, iy0))
+        canvas.paste(Image.fromarray(v_left,    'RGBA'), (ix0 + INSET_MINI + INSET_GAP, iy0))
+        canvas.paste(Image.fromarray(v_bottom,  'RGBA'), (ix0, iy0 + INSET_MINI + INSET_GAP))
+        canvas.paste(Image.fromarray(v_antiiso, 'RGBA'),
+                     (ix0 + INSET_MINI + INSET_GAP, iy0 + INSET_MINI + INSET_GAP))
 
     draw = ImageDraw.Draw(canvas)
     try:
@@ -335,6 +337,8 @@ def main():
     ap.add_argument("root")
     ap.add_argument("--force", action="store_true", help="re-render existing previews")
     ap.add_argument("--force-groups", action="store_true", help="re-stitch group images")
+    ap.add_argument("--no-inset", action="store_true",
+                    help="skip the dead-center 4-mini inverse inset (faster, less detail)")
     args = ap.parse_args(argv)
 
     root = Path(args.root)
@@ -403,7 +407,8 @@ def main():
                 continue
             ts = time.time()
             try:
-                dims = render_stl_preview(scene, cam, cam_data, stl, out)
+                dims = render_stl_preview(scene, cam, cam_data, stl, out,
+                                          inset=not args.no_inset)
                 dt = time.time() - ts
                 rendered += 1
                 log(f"  [{i}/{total}] {stl.name} ({dt:.1f}s)")
