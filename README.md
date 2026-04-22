@@ -98,6 +98,9 @@ Optional flags (after the `--`):
 - `--force` — re-render existing previews instead of skipping. Use after
   changing render settings.
 - `--force-groups` — re-stitch existing group images (cheap; just PIL).
+- `--no-inset` — skip the dead-center 4-mini inverse-view inset. Each STL
+  gets only the 4 main views. Slightly faster and avoids the inset
+  overlapping subject content for clean silhouettes.
 
 ### Multiprocess (recommended for big trees)
 
@@ -167,6 +170,22 @@ Most behavior lives at the top of each script:
   `_part1`, `_part2`, etc. above the item cap.
 - `CLAY`, `BG_F` — render colors.
 - `INSET_MINI` — pixel size of the dead-center inverse minis.
+
+### Render readback (env var)
+
+`RENDER_READBACK` controls how rendered pixels get into numpy. Auto-probe
+picks the fastest available; force a specific tier with:
+
+- `RENDER_READBACK=direct` — read from `bpy.data.images['Render Result']`
+  directly. Fastest (no disk) but unreliable in headless mode on some
+  Blender builds.
+- `RENDER_READBACK=bmp` — write tmp BMP, PIL load. Auto-default when
+  `direct` fails. ~5x faster encode/decode than PNG.
+- `RENDER_READBACK=png` — original behavior. Fully portable, slowest.
+
+When forced explicitly, no fallback — the script raises if that tier
+fails. Default behavior probes once at startup and locks in the first
+tier that works.
 
 The grouping heuristic (`group_key()` in `stitch_only.py`) strips trailing
 digits, version suffixes (`_v2`), and Left/Right markers to find natural
