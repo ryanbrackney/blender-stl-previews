@@ -392,27 +392,51 @@ def iter_stls(root):
             yield p
     # Some stls have uppercase ext; rglob is case-insensitive on Windows for this.
 
+def iter_stls_in_folders(folders):
+    """Non-recursive: only direct .stl children of each listed folder, in
+    sorted folder/file order so the pipelined stitch logic still triggers
+    correctly on folder transitions."""
+    for folder in folders:
+        for p in sorted(folder.glob("*.stl")):
+            if p.is_file() and not _excluded(p):
+                yield p
+
 def main():
     ap = argparse.ArgumentParser()
     # Blender passes args after " -- "; filter accordingly
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
-    ap.add_argument("root")
+    ap.add_argument("root", nargs="?", help="root dir to recurse for *.stl (mutually exclusive with --folders-file)")
+    ap.add_argument("--folders-file", help="path to a file with one folder per line; only direct STL children of each are processed")
     ap.add_argument("--force", action="store_true", help="re-render existing previews")
     ap.add_argument("--force-groups", action="store_true", help="re-stitch group images")
     ap.add_argument("--no-inset", action="store_true",
                     help="skip the dead-center 4-mini inverse inset (faster, less detail)")
     args = ap.parse_args(argv)
 
-    root = Path(args.root)
-    if not root.is_dir():
-        raise SystemExit(f"not a directory: {root}")
+    if bool(args.root) == bool(args.folders_file):
+        raise SystemExit("specify exactly one of <root> or --folders-file")
+
+    if args.folders_file:
+        with open(args.folders_file, encoding='utf-8') as f:
+            folders = [Path(line.rstrip('\r\n')) for line in f if line.strip()]
+        # tag log lines with worker hint from filename
+        worker_tag = Path(args.folders_file).stem
+        log(f"=== batch start (worker={worker_tag}): {len(folders)} folders force={args.force} force_groups={args.force_groups}")
+        manifest("start_worker", worker=worker_tag, folder_count=len(folders),
+                 force=args.force, force_groups=args.force_groups)
+        root = None
+    else:
+        root = Path(args.root)
+        if not root.is_dir():
+            raise SystemExit(f"not a directory: {root}")
 
     scene, cam, cam_data = setup_scene()
-    log(f"=== batch start: root={root} force={args.force} force_groups={args.force_groups}")
-    manifest("start", root=str(root), force=args.force, force_groups=args.force_groups)
-
-    # Pass 1: render each STL
-    stls = list(iter_stls(root))
+    if root is not None:
+        log(f"=== batch start: root={root} force={args.force} force_groups={args.force_groups}")
+        manifest("start", root=str(root), force=args.force, force_groups=args.force_groups)
+        stls = list(iter_stls(root))
+    else:
+        stls = list(iter_stls_in_folders(folders))
     total = len(stls)
     log(f"discovered {total} .stl files")
     manifest("discovered", count=total)
