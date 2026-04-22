@@ -139,11 +139,77 @@ def recenter_origin(obj):
     obj.location = (0, 0, 0)
 
 # ---------- rendering ----------
-_render_tmp = None
+# Three-tier readback strategy, fastest first, each falling back to the next
+# if it fails. Per-process probe at startup picks the best one and sticks
+# with it. Set RENDER_READBACK env var to force a tier:
+#   RENDER_READBACK=direct   -> Render Result pixels (skip disk entirely)
+#   RENDER_READBACK=bmp      -> uncompressed BMP via disk
+#   RENDER_READBACK=png      -> compressed PNG via disk (the original)
+_readback_mode = os.environ.get("RENDER_READBACK")  # None = auto-probe
+_render_tmp_png = None
+_render_tmp_bmp = None
+
+def _ensure_tmp_paths():
+    global _render_tmp_png, _render_tmp_bmp
+    if _render_tmp_png is None:
+        _render_tmp_png = os.path.join(bpy.app.tempdir, "view_tmp.png")
+        _render_tmp_bmp = os.path.join(bpy.app.tempdir, "view_tmp.bmp")
+
+def _readback_direct():
+    """Read pixels from bpy.data.images['Render Result'] directly. Fastest
+    when supported but headless mode is finicky — many Blender versions
+    return an empty pixel buffer here."""
+    img = bpy.data.images.get('Render Result')
+    if img is None:
+        raise RuntimeError("no 'Render Result' image available")
+    w, h = img.size
+    if w == 0 or h == 0:
+        raise RuntimeError("Render Result has zero size")
+    arr = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(arr)
+    arr = arr.reshape(h, w, 4)
+    arr = np.flipud(arr)  # render-result origin is bottom-left
+    return (arr * 255).clip(0, 255).astype(np.uint8)
+
+def _readback_disk(scene, fmt):
+    """Render to tmp file, read back via PIL. fmt='PNG' or 'BMP'."""
+    _ensure_tmp_paths()
+    tmp = _render_tmp_png if fmt == 'PNG' else _render_tmp_bmp
+    saved_format = scene.render.image_settings.file_format
+    scene.render.image_settings.file_format = fmt
+    scene.render.filepath = tmp
+    try:
+        bpy.ops.render.render(write_still=True)
+        return np.asarray(Image.open(tmp).convert('RGBA'))
+    finally:
+        scene.render.image_settings.file_format = saved_format
+
+def _do_render(scene):
+    """Run a render with the cached readback mode, falling back on failure."""
+    global _readback_mode
+    tiers = ['direct', 'bmp', 'png'] if _readback_mode is None else [_readback_mode]
+    last_err = None
+    for tier in tiers:
+        try:
+            if tier == 'direct':
+                bpy.ops.render.render()  # in-memory render; pixels via Render Result
+                arr = _readback_direct()
+            elif tier == 'bmp':
+                arr = _readback_disk(scene, 'BMP')
+            else:
+                arr = _readback_disk(scene, 'PNG')
+            if _readback_mode is None:
+                _readback_mode = tier
+                print(f"[render] readback mode locked in: {tier}", flush=True)
+            return arr
+        except Exception as e:
+            last_err = e
+            if _readback_mode == tier:
+                raise  # explicit override failed
+            print(f"[render] readback '{tier}' failed ({e}); falling back", flush=True)
+    raise RuntimeError(f"all readback tiers failed; last error: {last_err}")
+
 def render_view_u8(scene, cam, cam_data, cam_loc, ortho, max_dim):
-    global _render_tmp
-    if _render_tmp is None:
-        _render_tmp = os.path.join(bpy.app.tempdir, "view_tmp.png")
     cam.location = Vector(cam_loc)
     look_at(cam)
     cam_data.type = 'ORTHO' if ortho else 'PERSP'
@@ -151,11 +217,7 @@ def render_view_u8(scene, cam, cam_data, cam_loc, ortho, max_dim):
         cam_data.ortho_scale = max_dim * 1.15
     else:
         cam_data.lens = 50
-    scene.render.filepath = _render_tmp
-    bpy.ops.render.render(write_still=True)
-    # Skip the bpy.data.images round-trip — PIL decodes the PNG ~5x faster
-    # and yields uint8 RGBA with origin already top-left (no flip needed).
-    return np.asarray(Image.open(_render_tmp).convert('RGBA'))
+    return _do_render(scene)
 
 def render_stl_preview(scene, cam, cam_data, stl_path, out_path):
     clear_meshes()
