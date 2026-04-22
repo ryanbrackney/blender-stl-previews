@@ -99,6 +99,23 @@ Optional flags (after the `--`):
   changing render settings.
 - `--force-groups` — re-stitch existing group images (cheap; just PIL).
 
+### Multiprocess (recommended for big trees)
+
+Spawns N parallel Blender workers, each rendering a partition of the
+folders. On an N-core machine you get ~N× throughput.
+
+```sh
+python batch_parallel.py "C:\path\to\stl\library" [--workers N]
+```
+
+Defaults to `cpu_count - 1` workers. Each worker writes its own log to
+`workers/worker_NN.log`; the dispatcher prints a combined summary at the
+end. Greedy bin-packing balances STL count across workers, so workers
+finish at roughly the same time.
+
+Same `--force` / `--force-groups` flags work and are forwarded to each
+worker.
+
 ### Stitching only (pure PIL, much faster)
 
 If your previews already exist and you only want to (re)build group images,

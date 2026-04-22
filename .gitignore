@@ -9,6 +9,7 @@ __pycache__/
 batch.log
 manifest.jsonl
 stdout.log
+workers/
 
 # Generated / regenerated assets
 filler_tile.png
